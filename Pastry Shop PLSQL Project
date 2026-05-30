@@ -1,0 +1,293 @@
+PROBLEM 1: Anonymous Block (Collections, DDL, and Exceptions)
+Create an anonymous PL/SQL block that creates a backup table for DIA_PASTRIES using native dynamic SQL (EXECUTE IMMEDIATE). Define an index-by table (associative array) to store and display the salaries of all employees. Use a nested table for promotional discount rates and handle exceptions if a backup table cannot be created. 
+
+SET SERVEROUTPUT ON;
+DECLARE
+    TYPE t_emp_salaries IS TABLE OF NUMBER INDEX BY PLS_INTEGER;
+    v_salaries t_emp_salaries;
+
+    TYPE t_category_list IS TABLE OF VARCHAR2(30);
+    v_categories t_category_list := t_category_list('Cake', 'Viennoiserie', 'Cookies');
+
+    TYPE t_discounts IS VARRAY(3) OF NUMBER;  
+    v_promo_rates t_discounts := t_discounts(5, 10, 15);
+
+    v_table_count NUMBER;
+    v_counter NUMBER := 1; -- For the WHILE loop
+BEGIN
+    -- Mandatory Output
+    DBMS_OUTPUT.PUT_LINE('==============================================');
+    DBMS_OUTPUT.PUT_LINE('Project execution by: Pahontu Diana-Ioana');
+    DBMS_OUTPUT.PUT_LINE('==============================================');
+
+    WHILE v_counter <= 3 LOOP
+        DBMS_OUTPUT.PUT_LINE('System check step ' || v_counter || ' complete.');
+        v_counter := v_counter + 1;
+    END LOOP;
+
+    SELECT COUNT(*) INTO v_table_count FROM user_tables WHERE table_name = 'DIA_PASTRIES_BKUP';
+
+    IF v_table_count > 0 THEN
+        EXECUTE IMMEDIATE 'DROP TABLE DIA_PASTRIES_BKUP';
+        DBMS_OUTPUT.PUT_LINE('Old backup dropped.');
+    END IF;
+
+    EXECUTE IMMEDIATE 'CREATE TABLE DIA_PASTRIES_BKUP AS SELECT * FROM DIA_PASTRIES';
+    DBMS_OUTPUT.PUT_LINE('Backup table DIA_PASTRIES_BKUP successfully created.');
+
+    FOR rec IN (SELECT employee_id, salary FROM DIA_EMPLOYEES) LOOP
+        v_salaries(rec.employee_id) := rec.salary;
+    END LOOP;
+
+    DBMS_OUTPUT.PUT_LINE('Stored ' || v_salaries.COUNT || ' employee salaries in the associative array.');
+
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('An unexpected error occurred: ' || SQLERRM);
+END;
+/
+ 
+
+PROBLEM 2: The Core Package (Procedures, Functions, and Cursors)
+Create a package named `DOLCE_VITA_PKG`.
+The package specification must contain 3 functions and 3 procedures.
+
+- A function that returns the total revenue for an employee.
+- A function that checks ingredient stock status using a `CASE` expression.
+- A function that returns customer loyalty status based on their credit limit.
+- A procedure that updates pastry prices by category. Use an explicit cursor 
+with the `FOR UPDATE` clause and `WHERE CURRENT OF`. Handle a user-defined 
+exception if the price increase is negative.
+- A procedure to generate an employee report using a cursor with parameters.
+- A procedure to simulate restocking an ingredient.
+Create a testing block to call and test these subprograms.
+
+
+-- 1. PACKAGE SPECIFICATION
+CREATE OR REPLACE PACKAGE DOLCE_VITA_PKG AS
+    -- Public Functions
+    FUNCTION get_total_revenue(p_emp_id NUMBER) RETURN NUMBER;
+    FUNCTION get_stock_status(p_ingredient_id NUMBER) RETURN VARCHAR2;
+    FUNCTION check_customer_loyalty(p_customer_id NUMBER) RETURN VARCHAR2;
+
+    -- Public Procedures
+    PROCEDURE update_pastry_prices(p_category VARCHAR2, p_increase_pct NUMBER);
+    PROCEDURE generate_emp_report(p_manager_id NUMBER);
+    PROCEDURE apply_restock(p_supplier_id NUMBER, p_ingredient_id NUMBER, p_qty NUMBER, p_cost NUMBER);
+
+    e_negative_value EXCEPTION;
+    e_invalid_manager EXCEPTION; 
+END DOLCE_VITA_PKG;
+/
+
+
+-- 2. PACKAGE BODY
+CREATE OR REPLACE PACKAGE BODY DOLCE_VITA_PKG AS
+
+    -- Function 1: Implicit cursor to calculate revenue
+    FUNCTION get_total_revenue(p_emp_id NUMBER) RETURN NUMBER IS
+        v_total NUMBER;
+    BEGIN
+        SELECT SUM(total_amount) INTO v_total
+        FROM DIA_ORDERS
+        WHERE employee_id = p_emp_id AND status = 'COMPLETED';
+
+        RETURN NVL(v_total, 0);
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN 0;
+    END get_total_revenue;
+
+    -- Function 2: CASE expression to check stock
+    FUNCTION get_stock_status(p_ingredient_id NUMBER) RETURN VARCHAR2 IS
+        v_qty NUMBER;
+        v_status VARCHAR2(20);
+    BEGIN
+        SELECT stock_quantity INTO v_qty
+        FROM DIA_INGREDIENTS
+        WHERE ingredient_id = p_ingredient_id;
+
+        v_status := CASE
+            WHEN v_qty < 20 THEN 'CRITICAL'
+            WHEN v_qty BETWEEN 20 AND 100 THEN 'LOW'
+            ELSE 'HEALTHY'
+        END;
+        RETURN v_status;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN 'NOT FOUND'; 
+    END get_stock_status;
+
+    -- Function 3: IF statement for loyalty
+    FUNCTION check_customer_loyalty(p_customer_id NUMBER) RETURN VARCHAR2 IS
+        v_limit NUMBER;
+    BEGIN
+        SELECT credit_limit INTO v_limit FROM DIA_CUSTOMERS WHERE customer_id = p_customer_id;
+
+        IF v_limit >= 2000 THEN RETURN 'GOLD';
+        ELSIF v_limit >= 1000 THEN RETURN 'SILVER';
+        ELSE RETURN 'BRONZE';
+        END IF;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN RETURN 'UNKNOWN';
+    END check_customer_loyalty;
+
+    -- Procedure 1: Explicit Cursor with FOR UPDATE OF
+    PROCEDURE update_pastry_prices(p_category VARCHAR2, p_increase_pct NUMBER) IS
+        CURSOR c_pastries IS
+            SELECT price FROM DIA_PASTRIES
+            WHERE category = p_category
+            FOR UPDATE OF price NOWAIT;
+    BEGIN
+        IF p_increase_pct < 0 THEN
+            RAISE e_negative_value;
+        END IF;
+
+        FOR rec IN c_pastries LOOP
+            UPDATE DIA_PASTRIES
+            SET price = price + (price * (p_increase_pct / 100))
+            WHERE CURRENT OF c_pastries;
+        END LOOP;
+        DBMS_OUTPUT.PUT_LINE('Prices updated successfully for category: ' || p_category);
+        COMMIT;
+    EXCEPTION
+        WHEN e_negative_value THEN
+            DBMS_OUTPUT.PUT_LINE('Error: Percentage must be positive.');
+        WHEN OTHERS THEN
+            DBMS_OUTPUT.PUT_LINE(SQLERRM);
+    END update_pastry_prices;
+
+    -- Procedure 2: Cursor with parameters
+    PROCEDURE generate_emp_report(p_manager_id NUMBER) IS
+        CURSOR c_emp (p_mgr_id NUMBER) IS
+            SELECT first_name, last_name, salary FROM DIA_EMPLOYEES WHERE manager_id = p_mgr_id;
+    BEGIN
+        -- Checking for the second explicit exception
+        IF p_manager_id IS NULL THEN
+            RAISE e_invalid_manager;
+        END IF;
+
+        DBMS_OUTPUT.PUT_LINE('--- Employees under Manager ' || p_manager_id || ' ---');
+        FOR rec IN c_emp(p_manager_id) LOOP
+            DBMS_OUTPUT.PUT_LINE('Name: ' || rec.first_name || ' ' || rec.last_name || ' | Salary: ' || rec.salary);
+        END LOOP;
+        
+    EXCEPTION
+        WHEN e_invalid_manager THEN
+            DBMS_OUTPUT.PUT_LINE('Error: Manager ID cannot be null.');
+    END generate_emp_report;
+
+    -- Procedure 3: DML operation with implicit exception handling
+    PROCEDURE apply_restock(p_supplier_id NUMBER, p_ingredient_id NUMBER, p_qty NUMBER, p_cost NUMBER) IS
+        v_purchase_id NUMBER;
+    BEGIN
+        v_purchase_id := 5000 + ROUND(DBMS_RANDOM.VALUE(1,1000));
+
+        INSERT INTO DIA_PURCHASES (purchase_id, supplier_id, ingredient_id, purchase_date, quantity, cost_total)
+        VALUES (v_purchase_id, p_supplier_id, p_ingredient_id, SYSDATE, p_qty, p_cost);
+
+        UPDATE DIA_INGREDIENTS
+        SET stock_quantity = stock_quantity + p_qty
+        WHERE ingredient_id = p_ingredient_id;
+        DBMS_OUTPUT.PUT_LINE('Restock applied successfully.');
+    EXCEPTION
+        WHEN DUP_VAL_ON_INDEX THEN
+            DBMS_OUTPUT.PUT_LINE('Error: Primary key violation on Purchases.');
+    END apply_restock;
+
+END DOLCE_VITA_PKG;
+/
+
+
+-- 3. TESTING BLOCK
+SET SERVEROUTPUT ON;
+
+DECLARE
+    v_status VARCHAR2(20);
+    v_loyalty VARCHAR2(20);
+BEGIN
+    -- Test Function 1
+    v_status := DOLCE_VITA_PKG.get_stock_status(1); 
+    DBMS_OUTPUT.PUT_LINE('Ingredient 1 Stock Status: ' || v_status);
+
+    -- Test Procedure 2
+    DOLCE_VITA_PKG.generate_emp_report(100); 
+
+    -- Test Procedure 1 with valid and invalid values
+    DOLCE_VITA_PKG.update_pastry_prices('Cake', 10);
+    
+    -- This will trigger the exception, but now it will be caught safely
+    DOLCE_VITA_PKG.update_pastry_prices('Cookies', -5); 
+
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('An error occurred: ' || SQLERRM);
+END;
+/
+ 
+
+PROBLEM 3: Triggers (Row-Level and Statement-Level) 
+Create a row-level trigger that prevents an employee's salary from being decreased by more than 20% during an UPDATE. Test the trigger using at least one SQL statement.
+
+-- ROW-LEVEL TRIGGER 1: Prevent Drastic Salary Cuts
+CREATE OR REPLACE TRIGGER trg_prevent_salary_cut
+BEFORE UPDATE OF salary ON DIA_EMPLOYEES
+FOR EACH ROW
+BEGIN
+    -- Check if the new salary is drastically lower than the old salary
+    IF :NEW.salary < (:OLD.salary * 0.8) THEN
+        RAISE_APPLICATION_ERROR(-20002, 'Salary decrease cannot exceed 20% of the current salary!');
+    END IF;
+END;
+/
+
+
+-- ROW-LEVEL TRIGGER 2: Prevent Deleting Completed Orders
+CREATE OR REPLACE TRIGGER trg_prevent_del_ord
+BEFORE DELETE ON DIA_ORDERS
+FOR EACH ROW
+BEGIN
+    IF :OLD.status = 'COMPLETED' THEN
+        RAISE_APPLICATION_ERROR(-20004, 'Cannot delete an order that has already been COMPLETED.');
+    END IF;
+END;
+/
+
+
+
+-- STATEMENT-LEVEL TRIGGER 1: Audit New Hires
+CREATE OR REPLACE TRIGGER trg_employee_audit
+AFTER INSERT ON DIA_EMPLOYEES
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('AUDIT: A new employee has been added to the Dolce Vita system.');
+END;
+/
+
+
+-- TESTING SECTION: Test the Salary Cut Trigger 
+UPDATE DIA_EMPLOYEES
+SET salary = salary * 0.5
+WHERE employee_id = 101;
+
+ 
+
+
+PROBLEM 4: 
+Create a statement-level trigger to secure the DIA_PASTRIES menu. 
+Restrict any INSERT, UPDATE, or DELETE operations from happening during 
+the weekend (Saturday or Sunday).
+
+CREATE OR REPLACE TRIGGER trg_secure_pastries
+BEFORE INSERT OR UPDATE OR DELETE ON DIA_PASTRIES
+BEGIN
+    -- Prevent menu item alterations on weekends
+    IF TRIM(TO_CHAR(SYSDATE, 'DAY')) IN ('SATURDAY', 'SUNDAY') THEN
+        RAISE_APPLICATION_ERROR(-20003, 'Operation not allowed. You may only alter the Pastry Menu during weekday business hours.');
+    END IF;
+END;
+/
+
+
+-- Test the trigger (If today is a weekend, this will fail)
+INSERT INTO DIA_PASTRIES (pastry_id, pastry_name, category, price)
+VALUES (999, 'Test Eclair', 'Viennoiserie', 15);
